@@ -9,17 +9,33 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Alert,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useApp, MonthlyArchive } from '../context/AppContext';
+import { LineChart, BarChart } from 'react-native-chart-kit';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { useApp, MonthlyArchive, Order } from '../context/AppContext';
 import Header from '../components/Header';
 import FAB from '../components/FAB';
 import AddOrderModal from '../components/AddOrderModal';
+
+const screenWidth = Dimensions.get('window').width;
+
+const CZECH_MONTHS = [
+  'Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen',
+  'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec'
+];
 
 interface ServiceBreakdown {
   serviceName: string;
   revenue: number;
   count: number;
+}
+
+interface DailyRevenue {
+  day: number;
+  revenue: number;
 }
 
 export default function Prehled() {
@@ -28,6 +44,7 @@ export default function Prehled() {
   const [modalVisible, setModalVisible] = useState(false);
   const [expandedArchiveId, setExpandedArchiveId] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -58,11 +75,14 @@ export default function Prehled() {
     );
   };
 
+  // Calculate all statistics
   const stats = useMemo(() => {
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    const todayStart = new Date(currentYear, currentMonth, now.getDate()).getTime();
     const weekStart = todayStart - 6 * 24 * 60 * 60 * 1000;
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const monthStart = new Date(currentYear, currentMonth, 1).getTime();
 
     // Daily stats
     const todayOrders = orders.filter((o) => new Date(o.timestamp).getTime() >= todayStart);
@@ -74,18 +94,15 @@ export default function Prehled() {
     const weeklyRevenue = weekOrders.reduce((sum, order) => sum + order.price, 0);
     const weeklyCosts = weekOrders.reduce((sum, order) => sum + order.materialCost, 0);
 
-    // Monthly stats with operational costs
+    // Monthly stats
     const monthOrders = orders.filter((o) => new Date(o.timestamp).getTime() >= monthStart);
     const monthRevenue = monthOrders.reduce((sum, order) => sum + order.price, 0);
     const monthMaterialCosts = monthOrders.reduce((sum, order) => sum + order.materialCost, 0);
-    
     const totalFixedCosts = fixedCosts.reduce((sum, cost) => sum + cost.amount, 0);
-    
     const monthOneTimeCosts = oneTimeCosts.reduce((sum, cost) => sum + cost.amount, 0);
-    
     const monthProfit = monthRevenue - monthMaterialCosts - totalFixedCosts - monthOneTimeCosts;
 
-    // Service breakdown
+    // Service breakdown for top services
     const breakdownMap = new Map<string, ServiceBreakdown>();
     monthOrders.forEach((order) => {
       const existing = breakdownMap.get(order.serviceName);
@@ -100,7 +117,67 @@ export default function Prehled() {
         });
       }
     });
-    const serviceBreakdown = Array.from(breakdownMap.values()).sort((a, b) => b.revenue - a.revenue);
+    const serviceBreakdown = Array.from(breakdownMap.values())
+      .sort((a, b) => b.count - a.count || b.revenue - a.revenue);
+    const topServices = serviceBreakdown.slice(0, 5);
+
+    // Daily revenue chart data
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const dailyRevenueData: DailyRevenue[] = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayStart = new Date(currentYear, currentMonth, day).getTime();
+      const dayEnd = new Date(currentYear, currentMonth, day + 1).getTime();
+      const dayOrders = orders.filter(o => {
+        const ts = new Date(o.timestamp).getTime();
+        return ts >= dayStart && ts < dayEnd;
+      });
+      const dayRevenue = dayOrders.reduce((sum, o) => sum + o.price, 0);
+      dailyRevenueData.push({ day, revenue: dayRevenue });
+    }
+
+    // Monthly comparison (last 6 months)
+    const monthlyComparison: { month: string; revenue: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const targetDate = new Date(currentYear, currentMonth - i, 1);
+      const targetMonth = targetDate.getMonth();
+      const targetYear = targetDate.getFullYear();
+      
+      if (i === 0) {
+        // Current month from orders
+        monthlyComparison.push({
+          month: CZECH_MONTHS[targetMonth].substring(0, 3),
+          revenue: monthRevenue,
+        });
+      } else {
+        // Previous months from archive
+        const archive = monthlyArchives.find(
+          a => a.month === targetMonth + 1 && a.year === targetYear
+        );
+        monthlyComparison.push({
+          month: CZECH_MONTHS[targetMonth].substring(0, 3),
+          revenue: archive ? archive.revenue : 0,
+        });
+      }
+    }
+
+    // Previous month comparison
+    const prevMonthDate = new Date(currentYear, currentMonth - 1, 1);
+    const prevMonth = prevMonthDate.getMonth();
+    const prevYear = prevMonthDate.getFullYear();
+    const prevArchive = monthlyArchives.find(
+      a => a.month === prevMonth + 1 && a.year === prevYear
+    );
+    
+    let revenueChange = 0;
+    let profitChange = 0;
+    let prevMonthLabel = CZECH_MONTHS[prevMonth] + ' ' + prevYear;
+    
+    if (prevArchive && prevArchive.revenue > 0) {
+      revenueChange = ((monthRevenue - prevArchive.revenue) / prevArchive.revenue) * 100;
+    }
+    if (prevArchive && prevArchive.netProfit !== 0) {
+      profitChange = ((monthProfit - prevArchive.netProfit) / Math.abs(prevArchive.netProfit)) * 100;
+    }
 
     return {
       daily: { revenue: dailyRevenue, costs: dailyCosts, profit: dailyRevenue - dailyCosts },
@@ -114,12 +191,255 @@ export default function Prehled() {
         ordersCount: monthOrders.length,
       },
       serviceBreakdown,
+      topServices,
+      dailyRevenueData,
+      monthlyComparison,
+      comparison: {
+        revenueChange,
+        profitChange,
+        prevMonthLabel,
+        hasPrevData: !!prevArchive,
+      },
+      monthOrders,
+      currentMonthLabel: CZECH_MONTHS[currentMonth] + ' ' + currentYear,
     };
-  }, [orders, fixedCosts, oneTimeCosts]);
+  }, [orders, fixedCosts, oneTimeCosts, monthlyArchives]);
+
+  // Generate PDF
+  const generatePDF = async () => {
+    setIsExporting(true);
+    try {
+      const now = new Date();
+      const generatedDate = now.toLocaleDateString('cs-CZ');
+      
+      // Build orders table rows
+      const ordersTableRows = stats.monthOrders
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .map(order => {
+          const date = new Date(order.timestamp).toLocaleDateString('cs-CZ');
+          return `
+            <tr>
+              <td>${date}</td>
+              <td>${order.serviceName}</td>
+              <td style="text-align: right;">${order.price} Kč</td>
+            </tr>
+          `;
+        }).join('');
+
+      // Build top services table rows
+      const topServicesRows = stats.topServices.map((service, index) => {
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        return `
+          <tr>
+            <td>${medal}</td>
+            <td>${service.serviceName}</td>
+            <td style="text-align: center;">${service.count}×</td>
+            <td style="text-align: right;">${service.revenue} Kč</td>
+          </tr>
+        `;
+      }).join('');
+
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Přehled - ${stats.currentMonthLabel}</title>
+          <style>
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              padding: 40px;
+              color: #333;
+            }
+            h1 {
+              color: #CE93D8;
+              border-bottom: 3px solid #CE93D8;
+              padding-bottom: 10px;
+            }
+            h2 {
+              color: #666;
+              margin-top: 30px;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 15px;
+            }
+            th, td {
+              padding: 12px;
+              text-align: left;
+              border-bottom: 1px solid #E0E0E0;
+            }
+            th {
+              background-color: #F8BBD9;
+              color: #333;
+              font-weight: 600;
+            }
+            .summary-table td:first-child {
+              font-weight: 600;
+            }
+            .summary-table td:last-child {
+              text-align: right;
+              font-weight: 700;
+            }
+            .profit-row {
+              background-color: #F5F5F5;
+            }
+            .profit-row td:last-child {
+              color: ${stats.monthly.profit >= 0 ? '#4CAF50' : '#F44336'};
+              font-size: 18px;
+            }
+            .footer {
+              margin-top: 40px;
+              padding-top: 20px;
+              border-top: 1px solid #E0E0E0;
+              color: #999;
+              font-size: 12px;
+              text-align: center;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>🏠 Můj Salon - ${stats.currentMonthLabel}</h1>
+          
+          <h2>📊 Měsíční souhrn</h2>
+          <table class="summary-table">
+            <tr>
+              <td>💰 Tržba</td>
+              <td>${stats.monthly.revenue} Kč</td>
+            </tr>
+            <tr>
+              <td>🧼 Náklady na materiál</td>
+              <td>-${stats.monthly.materialCosts} Kč</td>
+            </tr>
+            <tr>
+              <td>🏠 Fixní náklady</td>
+              <td>-${stats.monthly.fixedCosts} Kč</td>
+            </tr>
+            <tr>
+              <td>✂️ Jednorazové náklady</td>
+              <td>-${stats.monthly.oneTimeCosts} Kč</td>
+            </tr>
+            <tr class="profit-row">
+              <td>✅ Čistý zisk</td>
+              <td>${stats.monthly.profit >= 0 ? '+' : ''}${stats.monthly.profit} Kč</td>
+            </tr>
+          </table>
+
+          <h2>🏆 Top 5 služeb</h2>
+          ${stats.topServices.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 50px;">Pořadí</th>
+                  <th>Služba</th>
+                  <th style="width: 80px; text-align: center;">Počet</th>
+                  <th style="width: 100px; text-align: right;">Tržba</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${topServicesRows}
+              </tbody>
+            </table>
+          ` : '<p>Zatím žádné zakázky tento měsíc.</p>'}
+
+          <h2>📋 Seznam zakázek (${stats.monthOrders.length})</h2>
+          ${stats.monthOrders.length > 0 ? `
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 100px;">Datum</th>
+                  <th>Služba</th>
+                  <th style="width: 100px; text-align: right;">Cena</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${ordersTableRows}
+              </tbody>
+            </table>
+          ` : '<p>Zatím žádné zakázky tento měsíc.</p>'}
+
+          <div class="footer">
+            Vygenerováno ${generatedDate}
+          </div>
+        </body>
+        </html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+      
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `Přehled - ${stats.currentMonthLabel}`,
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        Alert.alert('Chyba', 'Sdílení není na tomto zařízení dostupné.');
+      }
+    } catch (error) {
+      console.error('PDF generation error:', error);
+      Alert.alert('Chyba', 'Nepodařilo se vygenerovat PDF.');
+    }
+    setIsExporting(false);
+  };
 
   const toggleArchiveExpand = (id: string) => {
     setExpandedArchiveId(expandedArchiveId === id ? null : id);
   };
+
+  // Chart configuration
+  const chartConfig = {
+    backgroundColor: '#FFFFFF',
+    backgroundGradientFrom: '#FFFFFF',
+    backgroundGradientTo: '#FFFFFF',
+    decimalPlaces: 0,
+    color: (opacity = 1) => `rgba(206, 147, 216, ${opacity})`,
+    labelColor: (opacity = 1) => `rgba(102, 102, 102, ${opacity})`,
+    style: {
+      borderRadius: 16,
+    },
+    propsForDots: {
+      r: '4',
+      strokeWidth: '2',
+      stroke: '#CE93D8',
+    },
+    propsForBackgroundLines: {
+      strokeDasharray: '',
+      stroke: '#E0E0E0',
+    },
+  };
+
+  // Prepare bar chart data (show only days with data or recent days)
+  const barChartData = useMemo(() => {
+    const today = new Date().getDate();
+    const daysToShow = Math.min(today, 14); // Show up to 14 days
+    const startDay = Math.max(1, today - 13);
+    
+    const labels: string[] = [];
+    const data: number[] = [];
+    
+    for (let i = startDay; i <= today; i++) {
+      labels.push(i.toString());
+      const dayData = stats.dailyRevenueData.find(d => d.day === i);
+      data.push(dayData ? dayData.revenue : 0);
+    }
+    
+    return {
+      labels,
+      datasets: [{ data: data.length > 0 ? data : [0] }],
+    };
+  }, [stats.dailyRevenueData]);
+
+  // Prepare line chart data for monthly comparison
+  const lineChartData = useMemo(() => ({
+    labels: stats.monthlyComparison.map(m => m.month),
+    datasets: [{
+      data: stats.monthlyComparison.map(m => m.revenue),
+      color: (opacity = 1) => `rgba(206, 147, 216, ${opacity})`,
+      strokeWidth: 3,
+    }],
+  }), [stats.monthlyComparison]);
 
   if (isLoading) {
     return (
@@ -143,6 +463,58 @@ export default function Prehled() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
+        {/* Export PDF Button */}
+        <TouchableOpacity
+          style={styles.exportButton}
+          onPress={generatePDF}
+          disabled={isExporting}
+        >
+          {isExporting ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <>
+              <Text style={styles.exportButtonIcon}>📄</Text>
+              <Text style={styles.exportButtonText}>Exportovat přehled</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {/* Daily Revenue Chart */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>📊 Graf tržeb (tento měsíc)</Text>
+          <View style={styles.chartContainer}>
+            <BarChart
+              data={barChartData}
+              width={screenWidth - 48}
+              height={180}
+              yAxisLabel=""
+              yAxisSuffix=" Kč"
+              chartConfig={chartConfig}
+              style={styles.chart}
+              fromZero
+              showValuesOnTopOfBars={false}
+            />
+          </View>
+        </View>
+
+        {/* Monthly Comparison Line Chart */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>📈 Srovnání měsíců (posledních 6)</Text>
+          <View style={styles.chartContainer}>
+            <LineChart
+              data={lineChartData}
+              width={screenWidth - 48}
+              height={180}
+              yAxisLabel=""
+              yAxisSuffix=" Kč"
+              chartConfig={chartConfig}
+              style={styles.chart}
+              bezier
+              fromZero
+            />
+          </View>
+        </View>
+
         {/* Daily Stats */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Dnešní tržba</Text>
@@ -173,15 +545,18 @@ export default function Prehled() {
           </View>
         </View>
 
-        {/* Monthly Stats */}
+        {/* Monthly Stats with Comparison */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Měsíční tržba</Text>
           <View style={styles.statsCard}>
-            <StatsRow
+            <StatsRowWithComparison
               icon="💰"
               label="Tržba"
               value={stats.monthly.revenue}
               color="#CE93D8"
+              change={stats.comparison.revenueChange}
+              prevLabel={stats.comparison.prevMonthLabel}
+              hasComparison={stats.comparison.hasPrevData}
             />
             <StatsRow
               icon="🧼"
@@ -201,12 +576,15 @@ export default function Prehled() {
               value={stats.monthly.oneTimeCosts}
               color="#F44336"
             />
-            <StatsRow
+            <StatsRowWithComparison
               icon="✅"
               label="Čistý zisk"
               value={stats.monthly.profit}
               color={stats.monthly.profit >= 0 ? '#4CAF50' : '#F44336'}
               highlighted
+              change={stats.comparison.profitChange}
+              prevLabel={stats.comparison.prevMonthLabel}
+              hasComparison={stats.comparison.hasPrevData}
             />
           </View>
 
@@ -226,6 +604,39 @@ export default function Prehled() {
                 </>
               )}
             </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Top Services Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>🏆 Top služby tento měsíc</Text>
+          {stats.topServices.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyText}>Zatím žádné zakázky tento měsíc</Text>
+            </View>
+          ) : (
+            <View style={styles.topServicesCard}>
+              {stats.topServices.map((service, index) => (
+                <View
+                  key={service.serviceName}
+                  style={[
+                    styles.topServiceRow,
+                    index < stats.topServices.length - 1 && styles.topServiceRowBorder,
+                  ]}
+                >
+                  <View style={styles.topServiceRank}>
+                    <Text style={styles.topServiceRankText}>
+                      {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`}
+                    </Text>
+                  </View>
+                  <View style={styles.topServiceInfo}>
+                    <Text style={styles.topServiceName}>{service.serviceName}</Text>
+                    <Text style={styles.topServiceCount}>×{service.count}</Text>
+                  </View>
+                  <Text style={styles.topServiceRevenue}>{service.revenue} Kč</Text>
+                </View>
+              ))}
+            </View>
           )}
         </View>
 
@@ -409,6 +820,55 @@ const StatsRow: React.FC<StatsRowProps> = ({
   </View>
 );
 
+interface StatsRowWithComparisonProps extends StatsRowProps {
+  change: number;
+  prevLabel: string;
+  hasComparison: boolean;
+}
+
+const StatsRowWithComparison: React.FC<StatsRowWithComparisonProps> = ({
+  icon,
+  label,
+  value,
+  color,
+  highlighted = false,
+  change,
+  prevLabel,
+  hasComparison,
+}) => (
+  <View
+    style={[
+      styles.statsRowWithComparison,
+      highlighted && { backgroundColor: '#F5F5F5', borderRadius: 8, padding: 12 },
+    ]}
+  >
+    <View style={styles.statsRowMain}>
+      <Text style={[styles.statsLabel, highlighted && { fontWeight: '700' }]}>
+        {icon && `${icon} `}{label}
+      </Text>
+      <Text
+        style={[
+          styles.statsValue,
+          { color },
+          highlighted && { fontSize: 24, fontWeight: '700' },
+        ]}
+      >
+        {value.toFixed(0)} Kč
+      </Text>
+    </View>
+    {hasComparison && (
+      <View style={styles.comparisonRow}>
+        <Text style={[
+          styles.comparisonText,
+          { color: change >= 0 ? '#4CAF50' : '#F44336' }
+        ]}>
+          {change >= 0 ? '↑' : '↓'} {change >= 0 ? '+' : ''}{change.toFixed(0)}% vs. {prevLabel}
+        </Text>
+      </View>
+    )}
+  </View>
+);
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -431,6 +891,24 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 100,
   },
+  exportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#CE93D8',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 20,
+    gap: 8,
+  },
+  exportButtonIcon: {
+    fontSize: 18,
+  },
+  exportButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
   section: {
     marginBottom: 24,
   },
@@ -439,6 +917,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#333',
     marginBottom: 12,
+  },
+  chartContainer: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 12,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    alignItems: 'center',
+  },
+  chart: {
+    borderRadius: 12,
   },
   statsCard: {
     backgroundColor: '#FAFAFA',
@@ -452,6 +941,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  statsRowWithComparison: {
+    marginBottom: 12,
+  },
+  statsRowMain: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  comparisonRow: {
+    marginTop: 4,
+  },
+  comparisonText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   statsLabel: {
     fontSize: 16,
@@ -475,6 +979,62 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  topServicesCard: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+  },
+  topServiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  topServiceRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  topServiceRank: {
+    width: 40,
+  },
+  topServiceRankText: {
+    fontSize: 20,
+  },
+  topServiceInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  topServiceName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    flex: 1,
+  },
+  topServiceCount: {
+    fontSize: 14,
+    color: '#999',
+    fontWeight: '500',
+  },
+  topServiceRevenue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#CE93D8',
+  },
+  emptyCard: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 12,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#999',
   },
   breakdownCard: {
     backgroundColor: '#FAFAFA',
