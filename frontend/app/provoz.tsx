@@ -53,7 +53,7 @@ export default function Provoz() {
   const handleEditFixedCost = (cost: typeof fixedCosts[0]) => {
     setEditingFixedCost(cost);
     setFixedCostName(cost.name);
-    setFixedCostAmount(cost.monthlyAmount.toString());
+    setFixedCostAmount(cost.amount.toString());
     setFixedModalVisible(true);
   };
 
@@ -73,12 +73,12 @@ export default function Provoz() {
       updateFixedCost({
         ...editingFixedCost,
         name: fixedCostName,
-        monthlyAmount: amount,
+        amount: amount,
       });
     } else {
       addFixedCost({
         name: fixedCostName,
-        monthlyAmount: amount,
+        amount: amount,
       });
     }
 
@@ -121,7 +121,6 @@ export default function Provoz() {
     addOneTimeCost({
       name: oneTimeCostName,
       amount: amount,
-      date: Date.now(),
     });
 
     setOneTimeModalVisible(false);
@@ -143,11 +142,11 @@ export default function Provoz() {
   };
 
   const getTotalFixedCosts = () => {
-    return fixedCosts.reduce((sum, cost) => sum + cost.monthlyAmount, 0);
+    return fixedCosts.reduce((sum, cost) => sum + cost.amount, 0);
   };
 
-  const formatDate = (timestamp: number) => {
-    const date = new Date(timestamp);
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
     return date.toLocaleDateString('cs-CZ');
   };
 
@@ -159,7 +158,7 @@ export default function Provoz() {
         activeOpacity={0.7}
       >
         <Text style={styles.costName}>{item.name}</Text>
-        <Text style={styles.costAmount}>{item.monthlyAmount} Kč / měsíc</Text>
+        <Text style={styles.costAmount}>{item.amount} Kč / měsíc</Text>
       </TouchableOpacity>
       <TouchableOpacity
         onPress={() => handleDeleteFixedCost(item.id)}
@@ -355,7 +354,7 @@ export default function Provoz() {
               </View>
 
               <Text style={styles.dateNote}>
-                Datum: {formatDate(Date.now())}
+                Datum: {new Date().toLocaleDateString('cs-CZ')}
               </Text>
 
               <TouchableOpacity

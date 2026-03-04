@@ -26,13 +26,13 @@ export default function Sluzby() {
   const [orderModalVisible, setOrderModalVisible] = useState(false);
   const [editingService, setEditingService] = useState<typeof services[0] | null>(null);
   const [serviceName, setServiceName] = useState('');
-  const [defaultPrice, setDefaultPrice] = useState('');
+  const [servicePrice, setServicePrice] = useState('');
   const [materialCost, setMaterialCost] = useState('');
 
   const handleAddService = () => {
     setEditingService(null);
     setServiceName('');
-    setDefaultPrice('');
+    setServicePrice('');
     setMaterialCost('');
     setModalVisible(true);
   };
@@ -40,7 +40,7 @@ export default function Sluzby() {
   const handleEditService = (service: typeof services[0]) => {
     setEditingService(service);
     setServiceName(service.name);
-    setDefaultPrice(service.defaultPrice.toString());
+    setServicePrice(service.price.toString());
     setMaterialCost(service.materialCost.toString());
     setModalVisible(true);
   };
@@ -51,7 +51,7 @@ export default function Sluzby() {
       return;
     }
 
-    const price = parseFloat(defaultPrice);
+    const price = parseFloat(servicePrice);
     const cost = parseFloat(materialCost);
 
     if (isNaN(price) || price < 0) {
@@ -68,13 +68,13 @@ export default function Sluzby() {
       updateService({
         ...editingService,
         name: serviceName,
-        defaultPrice: price,
+        price: price,
         materialCost: cost,
       });
     } else {
       addService({
         name: serviceName,
-        defaultPrice: price,
+        price: price,
         materialCost: cost,
       });
     }
@@ -120,7 +120,7 @@ export default function Sluzby() {
           <View style={styles.serviceDetails}>
             <View style={styles.detailItem}>
               <Text style={styles.detailLabel}>Cena:</Text>
-              <Text style={styles.detailValue}>{item.defaultPrice} Kč</Text>
+              <Text style={styles.detailValue}>{item.price} Kč</Text>
             </View>
             <View style={styles.detailItem}>
               <Text style={styles.detailLabel}>Materiál:</Text>
@@ -195,8 +195,8 @@ export default function Sluzby() {
                 <Text style={styles.label}>Výchozí cena (Kč)</Text>
                 <TextInput
                   style={styles.input}
-                  value={defaultPrice}
-                  onChangeText={setDefaultPrice}
+                  value={servicePrice}
+                  onChangeText={setServicePrice}
                   keyboardType="numeric"
                   placeholder="0"
                 />

@@ -7,17 +7,14 @@ import {
   SafeAreaView,
   RefreshControl,
   ActivityIndicator,
+  TouchableOpacity,
+  Alert,
 } from 'react-native';
-import { useApp } from '../context/AppContext';
+import { Ionicons } from '@expo/vector-icons';
+import { useApp, MonthlyArchive } from '../context/AppContext';
 import Header from '../components/Header';
 import FAB from '../components/FAB';
 import AddOrderModal from '../components/AddOrderModal';
-
-interface Statistics {
-  revenue: number;
-  costs: number;
-  profit: number;
-}
 
 interface ServiceBreakdown {
   serviceName: string;
@@ -26,13 +23,39 @@ interface ServiceBreakdown {
 }
 
 export default function Prehled() {
-  const { orders, fixedCosts, oneTimeCosts, isLoading } = useApp();
+  const { orders, fixedCosts, oneTimeCosts, monthlyArchives, isLoading, performMonthlyClose } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [expandedArchiveId, setExpandedArchiveId] = useState<string | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
 
   const onRefresh = () => {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 500);
+  };
+
+  const handleMonthlyClose = () => {
+    Alert.alert(
+      'Uzavřít měsíc',
+      'Opravdu chcete uzavřít aktuální měsíc? Všechny zakázky a jednorazové náklady budou archivovány.',
+      [
+        { text: 'Zrušit', style: 'cancel' },
+        {
+          text: 'Uzavřít',
+          style: 'destructive',
+          onPress: async () => {
+            setIsClosing(true);
+            try {
+              await performMonthlyClose();
+              Alert.alert('Hotovo', 'Měsíc byl úspěšně uzavřen.');
+            } catch (error) {
+              Alert.alert('Chyba', 'Nepodařilo se uzavřít měsíc.');
+            }
+            setIsClosing(false);
+          },
+        },
+      ]
+    );
   };
 
   const stats = useMemo(() => {
@@ -42,25 +65,23 @@ export default function Prehled() {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
     // Daily stats
-    const todayOrders = orders.filter((o) => o.timestamp >= todayStart);
+    const todayOrders = orders.filter((o) => new Date(o.timestamp).getTime() >= todayStart);
     const dailyRevenue = todayOrders.reduce((sum, order) => sum + order.price, 0);
     const dailyCosts = todayOrders.reduce((sum, order) => sum + order.materialCost, 0);
 
     // Weekly stats
-    const weekOrders = orders.filter((o) => o.timestamp >= weekStart);
+    const weekOrders = orders.filter((o) => new Date(o.timestamp).getTime() >= weekStart);
     const weeklyRevenue = weekOrders.reduce((sum, order) => sum + order.price, 0);
     const weeklyCosts = weekOrders.reduce((sum, order) => sum + order.materialCost, 0);
 
     // Monthly stats with operational costs
-    const monthOrders = orders.filter((o) => o.timestamp >= monthStart);
+    const monthOrders = orders.filter((o) => new Date(o.timestamp).getTime() >= monthStart);
     const monthRevenue = monthOrders.reduce((sum, order) => sum + order.price, 0);
     const monthMaterialCosts = monthOrders.reduce((sum, order) => sum + order.materialCost, 0);
     
-    const totalFixedCosts = fixedCosts.reduce((sum, cost) => sum + cost.monthlyAmount, 0);
+    const totalFixedCosts = fixedCosts.reduce((sum, cost) => sum + cost.amount, 0);
     
-    const monthOneTimeCosts = oneTimeCosts
-      .filter((c) => c.date >= monthStart)
-      .reduce((sum, cost) => sum + cost.amount, 0);
+    const monthOneTimeCosts = oneTimeCosts.reduce((sum, cost) => sum + cost.amount, 0);
     
     const monthProfit = monthRevenue - monthMaterialCosts - totalFixedCosts - monthOneTimeCosts;
 
@@ -90,10 +111,15 @@ export default function Prehled() {
         fixedCosts: totalFixedCosts,
         oneTimeCosts: monthOneTimeCosts,
         profit: monthProfit,
+        ordersCount: monthOrders.length,
       },
       serviceBreakdown,
     };
   }, [orders, fixedCosts, oneTimeCosts]);
+
+  const toggleArchiveExpand = (id: string) => {
+    setExpandedArchiveId(expandedArchiveId === id ? null : id);
+  };
 
   if (isLoading) {
     return (
@@ -183,6 +209,24 @@ export default function Prehled() {
               highlighted
             />
           </View>
+
+          {/* Monthly Close Button */}
+          {stats.monthly.ordersCount > 0 && (
+            <TouchableOpacity
+              style={styles.closeMonthButton}
+              onPress={handleMonthlyClose}
+              disabled={isClosing}
+            >
+              {isClosing ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Ionicons name="lock-closed-outline" size={20} color="#FFFFFF" />
+                  <Text style={styles.closeMonthButtonText}>Uzavřít měsíc</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Service Breakdown */}
@@ -215,6 +259,28 @@ export default function Prehled() {
             </View>
           </View>
         )}
+
+        {/* Monthly Archive History */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Historie uzávěrek</Text>
+          {monthlyArchives.length === 0 ? (
+            <View style={styles.emptyArchiveCard}>
+              <Ionicons name="folder-open-outline" size={48} color="#DDD" />
+              <Text style={styles.emptyArchiveText}>Zatím žádné uzávěrky</Text>
+            </View>
+          ) : (
+            <View style={styles.archiveList}>
+              {monthlyArchives.map((archive) => (
+                <ArchiveItem
+                  key={archive.id}
+                  archive={archive}
+                  expanded={expandedArchiveId === archive.id}
+                  onToggle={() => toggleArchiveExpand(archive.id)}
+                />
+              ))}
+            </View>
+          )}
+        </View>
       </ScrollView>
 
       <FAB onPress={() => setModalVisible(true)} />
@@ -226,6 +292,86 @@ export default function Prehled() {
     </SafeAreaView>
   );
 }
+
+interface ArchiveItemProps {
+  archive: MonthlyArchive;
+  expanded: boolean;
+  onToggle: () => void;
+}
+
+const ArchiveItem: React.FC<ArchiveItemProps> = ({ archive, expanded, onToggle }) => (
+  <TouchableOpacity
+    style={styles.archiveCard}
+    onPress={onToggle}
+    activeOpacity={0.7}
+  >
+    <View style={styles.archiveHeader}>
+      <View style={styles.archiveHeaderLeft}>
+        <Ionicons name="calendar-outline" size={20} color="#CE93D8" />
+        <Text style={styles.archiveLabel}>{archive.label}</Text>
+      </View>
+      <View style={styles.archiveHeaderRight}>
+        <Text style={[
+          styles.archiveProfit,
+          { color: archive.netProfit >= 0 ? '#4CAF50' : '#F44336' }
+        ]}>
+          {archive.netProfit >= 0 ? '+' : ''}{archive.netProfit.toFixed(0)} Kč
+        </Text>
+        <Ionicons
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={20}
+          color="#999"
+        />
+      </View>
+    </View>
+
+    {expanded && (
+      <View style={styles.archiveDetails}>
+        <View style={styles.archiveDetailRow}>
+          <Text style={styles.archiveDetailLabel}>💰 Tržba</Text>
+          <Text style={[styles.archiveDetailValue, { color: '#CE93D8' }]}>
+            {archive.revenue.toFixed(0)} Kč
+          </Text>
+        </View>
+        <View style={styles.archiveDetailRow}>
+          <Text style={styles.archiveDetailLabel}>🧼 Náklady na materiál</Text>
+          <Text style={[styles.archiveDetailValue, { color: '#F44336' }]}>
+            -{archive.materialCosts.toFixed(0)} Kč
+          </Text>
+        </View>
+        <View style={styles.archiveDetailRow}>
+          <Text style={styles.archiveDetailLabel}>🏠 Fixní náklady</Text>
+          <Text style={[styles.archiveDetailValue, { color: '#F44336' }]}>
+            -{archive.fixedCosts.toFixed(0)} Kč
+          </Text>
+        </View>
+        <View style={styles.archiveDetailRow}>
+          <Text style={styles.archiveDetailLabel}>✂️ Jednorazové náklady</Text>
+          <Text style={[styles.archiveDetailValue, { color: '#F44336' }]}>
+            -{archive.oneTimeCosts.toFixed(0)} Kč
+          </Text>
+        </View>
+        <View style={[styles.archiveDetailRow, styles.archiveDetailRowTotal]}>
+          <Text style={styles.archiveDetailLabelTotal}>✅ Čistý zisk</Text>
+          <Text style={[
+            styles.archiveDetailValueTotal,
+            { color: archive.netProfit >= 0 ? '#4CAF50' : '#F44336' }
+          ]}>
+            {archive.netProfit >= 0 ? '+' : ''}{archive.netProfit.toFixed(0)} Kč
+          </Text>
+        </View>
+        <View style={styles.archiveMetaRow}>
+          <Text style={styles.archiveMeta}>
+            {archive.ordersCount} zakázek
+          </Text>
+          <Text style={styles.archiveMeta}>
+            Uzavřeno: {new Date(archive.closedAt).toLocaleDateString('cs-CZ')}
+          </Text>
+        </View>
+      </View>
+    )}
+  </TouchableOpacity>
+);
 
 interface StatsRowProps {
   icon?: string;
@@ -315,6 +461,21 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '600',
   },
+  closeMonthButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#CE93D8',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+    gap: 8,
+  },
+  closeMonthButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
   breakdownCard: {
     backgroundColor: '#FAFAFA',
     borderRadius: 12,
@@ -349,5 +510,101 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#CE93D8',
+  },
+  emptyArchiveCard: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 12,
+    padding: 32,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyArchiveText: {
+    fontSize: 16,
+    color: '#999',
+    marginTop: 12,
+  },
+  archiveList: {
+    gap: 12,
+  },
+  archiveCard: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    marginBottom: 12,
+  },
+  archiveHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  archiveHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  archiveHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  archiveLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333',
+  },
+  archiveProfit: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  archiveDetails: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  archiveDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  archiveDetailRowTotal: {
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  archiveDetailLabel: {
+    fontSize: 14,
+    color: '#666',
+  },
+  archiveDetailValue: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  archiveDetailLabelTotal: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#333',
+  },
+  archiveDetailValueTotal: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  archiveMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  archiveMeta: {
+    fontSize: 12,
+    color: '#999',
   },
 });

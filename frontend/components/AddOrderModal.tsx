@@ -38,7 +38,7 @@ export default function AddOrderModal({
 
   const handleSelectService = (service: typeof services[0]) => {
     setSelectedService(service);
-    setPrice(service.defaultPrice.toString());
+    setPrice(service.price.toString());
   };
 
   const handleSave = () => {
@@ -57,7 +57,6 @@ export default function AddOrderModal({
       serviceName: selectedService.name,
       price: priceValue,
       materialCost: selectedService.materialCost,
-      timestamp: Date.now(),
     });
 
     Alert.alert('Hotovo', 'Zakázka byla uložena');
@@ -107,7 +106,7 @@ export default function AddOrderModal({
             >
               <View style={styles.serviceItemContent}>
                 <Text style={styles.serviceName}>{item.name}</Text>
-                <Text style={styles.servicePrice}>{item.defaultPrice} Kč</Text>
+                <Text style={styles.servicePrice}>{item.price} Kč</Text>
               </View>
               {selectedService?.id === item.id && (
                 <Ionicons name="checkmark-circle" size={24} color="#CE93D8" />
